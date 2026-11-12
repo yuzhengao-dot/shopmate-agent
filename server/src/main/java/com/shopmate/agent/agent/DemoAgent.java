@@ -1,0 +1,249 @@
+package com.shopmate.agent.agent;
+
+import com.shopmate.agent.model.Order;
+import com.shopmate.agent.model.Product;
+import com.shopmate.agent.model.TrackingNode;
+import com.shopmate.agent.repository.OrderRepository;
+import com.shopmate.agent.repository.ProductRepository;
+import org.springframework.stereotype.Component;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 演示模式：未配置大模型密钥时，用规则引擎跑通同样的「意图识别 -> 工具调用 -> 流式回答」链路。
+ * 它调用的是与 LLM 完全相同的 ShopTools，因此工具面板、商品/订单卡片都能正常展示。
+ */
+@Component
+public class DemoAgent {
+
+    private static final Pattern ORDER_NO = Pattern.compile("SM\\d{8,}");
+    private static final Pattern AMOUNT = Pattern.compile("(\\d{3,6})\\s*(?:元|块|rmb|以内|左右|预算)?");
+
+    private static final List<String> KEYWORDS = List.of(
+            "手机", "耳机", "扫地机器人", "显示器", "净化器", "吹风机",
+            "洁面", "精华", "咖啡", "音箱");
+
+    private final ShopTools tools;
+    private final ProductRepository products;
+    private final OrderRepository orders;
+
+    public DemoAgent(ShopTools tools, ProductRepository products, OrderRepository orders) {
+        this.tools = tools;
+        this.products = products;
+        this.orders = orders;
+    }
+
+    public void reply(String sessionId, String message, ChatStream stream) {
+        String text = message == null ? "" : message.trim();
+        if (text.isEmpty()) {
+            say(stream, "我在。可以帮你挑商品、查订单物流，或者处理退货换货。");
+            return;
+        }
+
+        if (containsAny(text, "退货", "退款", "退掉", "退换", "售后", "换货", "维修", "坏了", "损坏", "质量", "不想要")) {
+            afterSale(sessionId, text, stream);
+            return;
+        }
+        if (containsAny(text, "物流", "快递", "发货", "到哪", "签收", "配送", "什么时候到")) {
+            logistics(sessionId, text, stream);
+            return;
+        }
+        if (containsAny(text, "订单", "买了", "我的单", "下单")) {
+            orderList(sessionId, text, stream);
+            return;
+        }
+        if (containsAny(text, "推荐", "买", "预算", "适合", "哪个", "怎么选", "对比")
+                || KEYWORDS.stream().anyMatch(text::contains)) {
+            recommend(sessionId, text, stream);
+            return;
+        }
+        if (containsAny(text, "你好", "嗨", "hello", "hi", "在吗")) {
+            say(stream, """
+                    你好，我是 ShopMate 的导购助手小满。可以直接问我：
+
+                    1. 预算 3000 元以内，推荐一款拍照好的手机
+                    2. 我的订单到哪了
+                    3. 我想退掉上周买的扫地机器人
+                    4. 降噪耳机有什么推荐
+                    """);
+            return;
+        }
+
+        say(stream, """
+                这个我暂时没有把握。你可以这样问我：
+
+                - 商品：帮我推荐 500 元以内的耳机
+                - 订单：我最近的订单是什么状态
+                - 物流：SM20261105001 到哪了
+                - 售后：我想退掉 SM20261028002 这单
+
+                需要人工介入的话，回复「人工客服」。
+                """);
+    }
+
+    private void recommend(String sessionId, String text, ChatStream stream) {
+        String keyword = KEYWORDS.stream().filter(text::contains).findFirst().orElse(null);
+        Double budget = null;
+        Matcher matcher = AMOUNT.matcher(ORDER_NO.matcher(text).replaceAll(" "));
+        while (matcher.find()) {
+            double value = Double.parseDouble(matcher.group(1));
+            if (value >= 100 && value <= 50000) {
+                budget = value;
+            }
+        }
+
+        tools.searchProducts(keyword, null, null, budget, sessionId);
+        List<Product> found = products.search(keyword, null, null, budget, 3);
+
+        if (found.isEmpty()) {
+            say(stream, String.format(Locale.CHINA,
+                    "%s暂时没有符合条件的在售商品。可以放宽预算或换个品类，我按销量和评分再帮你筛一轮。",
+                    budget == null ? "" : "这个预算内"));
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(budget == null ? "按你的需求" : String.format(Locale.CHINA, "预算 %,.0f 元以内", budget));
+        if (keyword != null) {
+            sb.append("，").append(keyword).append("相关的");
+        }
+        sb.append("我选了 ").append(found.size()).append(" 件：\n\n");
+        for (int i = 0; i < found.size(); i++) {
+            Product p = found.get(i);
+            sb.append(i + 1).append(". ").append(p.name())
+                    .append(" · ¥").append(money(p.price())).append("\n   ")
+                    .append(firstSentence(p.summary())).append("\n\n");
+        }
+        sb.append("需要看哪件的详情，或者想比较其中两款，告诉我就行。");
+        say(stream, sb.toString());
+    }
+
+    private void orderList(String sessionId, String text, ChatStream stream) {
+        String orderNo = extractOrderNo(text);
+        if (orderNo != null) {
+            logistics(sessionId, text, stream);
+            return;
+        }
+        List<Order> list = orders.findByUser(ShopTools.DEMO_USER_ID, "ALL");
+        tools.queryOrders("ALL", sessionId);
+        if (list.isEmpty()) {
+            say(stream, "你名下暂时没有订单。");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("你名下共有 ").append(list.size()).append(" 笔订单：\n\n");
+        for (int i = 0; i < list.size(); i++) {
+            Order o = list.get(i);
+            sb.append(i + 1).append(". ").append(o.orderNo())
+                    .append(" · ").append(o.statusText())
+                    .append(" · ¥").append(money(o.totalAmount()))
+                    .append(" · ").append(o.createdAt()).append("\n");
+        }
+        sb.append("\n想看物流或申请售后，把订单号发我就行。");
+        say(stream, sb.toString());
+    }
+
+    private void logistics(String sessionId, String text, ChatStream stream) {
+        String orderNo = extractOrderNo(text);
+        Optional<Order> target = orderNo != null ? orders.findByNo(orderNo) : orders.findLatest(ShopTools.DEMO_USER_ID);
+        if (target.isEmpty()) {
+            say(stream, "没找到对应的订单，请确认订单号，格式类似 SM20261105001。");
+            return;
+        }
+        Order order = target.get();
+        tools.checkLogistics(order.orderNo(), sessionId);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("订单 ").append(order.orderNo()).append(" 当前状态：").append(order.statusText()).append("\n");
+        if (order.logisticsNo() != null && !order.logisticsNo().isBlank()) {
+            sb.append("承运商：").append(order.carrier()).append("（").append(order.logisticsNo()).append("）\n");
+        }
+        List<TrackingNode> tracking = order.tracking();
+        if (tracking.isEmpty()) {
+            sb.append("\n仓库还没有揽收，发货后我会同步轨迹。");
+        } else {
+            sb.append("\n最新轨迹：\n");
+            for (int i = Math.max(0, tracking.size() - 2); i < tracking.size(); i++) {
+                TrackingNode node = tracking.get(i);
+                sb.append("- ").append(node.time()).append("  ").append(node.text()).append("\n");
+            }
+        }
+        say(stream, sb.toString());
+    }
+
+    private void afterSale(String sessionId, String text, ChatStream stream) {
+        String orderNo = extractOrderNo(text);
+        Optional<Order> target;
+        if (orderNo != null) {
+            target = orders.findByNo(orderNo);
+        } else {
+            target = orders.findByUser(ShopTools.DEMO_USER_ID, "DELIVERED").stream().findFirst();
+        }
+        if (target.isEmpty()) {
+            say(stream, "请把要售后的订单号发我，格式类似 SM20261028002。");
+            return;
+        }
+        Order order = target.get();
+        String type = text.contains("换") ? "换货" : (text.contains("维修") || text.contains("坏") ? "维修" : "退货退款");
+        String result = tools.createAfterSaleTicket(order.orderNo(), type, text, sessionId);
+        if (!result.contains("\"ticket\"")) {
+            say(stream, "这单暂时无法创建售后工单：" + order.orderNo() + "（" + order.statusText()
+                    + "）。已签收或已完成的订单才能申请，其他情况请回复「人工客服」。");
+            return;
+        }
+        say(stream, String.format("""
+                已为订单 %s 提交「%s」申请，工单状态：待审核。
+
+                处理流程：
+                1. 客服在 24 小时内审核工单
+                2. 审核通过后短信告知寄回地址
+                3. 仓库签收后 1-3 个工作日原路退款
+
+                还有其他需要我处理的吗？
+                """, order.orderNo(), type));
+    }
+
+    private String extractOrderNo(String text) {
+        Matcher matcher = ORDER_NO.matcher(text.toUpperCase(Locale.ROOT));
+        return matcher.find() ? matcher.group() : null;
+    }
+
+    private void say(ChatStream stream, String text) {
+        int step = 6;
+        for (int i = 0; i < text.length(); i += step) {
+            stream.token(text.substring(i, Math.min(i + step, text.length())));
+            try {
+                Thread.sleep(12);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+    }
+
+    private static String money(BigDecimal value) {
+        return value == null ? "0.00" : String.format(Locale.CHINA, "%,.2f", value);
+    }
+
+    private static String firstSentence(String text) {
+        if (text == null || text.isBlank()) {
+            return "";
+        }
+        int idx = text.indexOf('。');
+        return idx > 0 ? text.substring(0, idx + 1) : text;
+    }
+
+    private static boolean containsAny(String text, String... words) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        for (String word : words) {
+            if (lower.contains(word.toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
