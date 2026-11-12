@@ -17,7 +17,7 @@
 | 商品详情 | 点击卡片追问价格、评分、库存、卖点 |
 | 订单查询 | 按状态查询当前用户订单，返回订单卡片（含明细） |
 | 物流跟踪 | 按订单号或「最近一笔订单」查询承运商与最新轨迹 |
-| 售后办理 | 校验订单状态后创建退换货 / 维修工单，返回工单卡片 |
+| 售后办理 | 校验订单状态 → 生成售后草稿 → 用户点击「确认提交」后才真正建单（两步确认） |
 | 流式对话 | SSE `meta / tool / token / error / done` 事件，逐字输出 + 工具轨迹实时上屏 |
 | 双运行模式 | 配置了 LLM 密钥 → 真 Agent；没有密钥 → 内置规则引擎，同样跑完整工具链路 |
 
@@ -145,10 +145,19 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | `queryOrders` | status | 订单列表 |
 | `getOrderDetail` | orderNo | 订单 + 明细 |
 | `checkLogistics` | orderNo | 订单 + 轨迹 |
-| `createAfterSaleTicket` | orderNo, type, reason | 售后工单 |
+| `prepareAfterSaleTicket` | orderNo, type, reason | 售后草稿（只校验 + 生成待确认卡片，不写库） |
 
 工具内部通过 `@ToolMemoryId` 拿到 `sessionId`，再从 `ChatStreamRegistry` 找到对应的 SSE 通道——
 这样工具在任意线程执行都能把轨迹推回正确的会话。
+
+### 写操作二次确认
+
+售后建单是唯一会改数据的动作，所以拆成两步：
+
+1. 模型只能调用 `prepareAfterSaleTicket`：校验订单存在、状态为已签收/已完成、且没有历史工单，然后返回 `afterSaleDraft` 草稿卡片；
+2. 前端渲染「售后申请待确认」，只有用户点击「确认提交」，才调用 `POST /api/orders/{orderNo}/after-sale` 真正写库，并把卡片换成工单。
+
+写入口没有暴露成工具，模型自己走不到第二步——从机制上避免「用户只是问一句，Agent 就把单建了」。
 
 ## 接口
 
@@ -172,7 +181,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | `error` | `{message}` |
 | `done` | `{sessionId}` |
 
-`payload.type` 决定前端渲染哪种卡片：`products` / `orders` / `ticket`。
+`payload.type` 决定前端渲染哪种卡片：`products` / `orders` / `ticket` / `afterSaleDraft`。
 
 ## 演示数据
 

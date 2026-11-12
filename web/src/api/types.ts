@@ -45,10 +45,21 @@ export interface AfterSaleTicket {
   createdAt: string;
 }
 
+/** 售后草稿：仅预检，未写入数据库，需要用户在前端确认 */
+export interface AfterSaleDraft {
+  orderNo: string;
+  statusText: string;
+  type: string;
+  reason: string;
+  totalAmount: number;
+  productName: string;
+}
+
 export type ToolPayload =
   | { type: 'products'; items: Product[] }
   | { type: 'orders'; items: Order[] }
-  | { type: 'ticket'; item: AfterSaleTicket };
+  | { type: 'ticket'; item: AfterSaleTicket }
+  | { type: 'afterSaleDraft'; item: AfterSaleDraft };
 
 export interface ToolTrace {
   id: string;

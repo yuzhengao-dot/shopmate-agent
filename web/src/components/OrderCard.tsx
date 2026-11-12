@@ -1,4 +1,6 @@
-import type { AfterSaleTicket, Order } from '@/api/types';
+import { useState } from 'react';
+import type { AfterSaleDraft, AfterSaleTicket, Order } from '@/api/types';
+import { createAfterSale } from '@/api/client';
 import { money, statusTone } from '@/lib/utils';
 
 interface OrderCardProps {
@@ -87,6 +89,77 @@ export function TicketCard({ ticket }: { ticket: AfterSaleTicket }) {
         </p>
         <p>原因：{ticket.reason}</p>
       </div>
+    </div>
+  );
+}
+
+/** 售后草稿确认卡：只有用户点击「确认提交」才会真正建单 */
+export function AfterSaleDraftCard({ draft }: { draft: AfterSaleDraft }) {
+  const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'cancelled'>('idle');
+  const [ticket, setTicket] = useState<AfterSaleTicket | null>(null);
+  const [error, setError] = useState('');
+
+  if (state === 'done' && ticket) {
+    return <TicketCard ticket={ticket} />;
+  }
+
+  const confirm = async () => {
+    setState('submitting');
+    setError('');
+    try {
+      const created = await createAfterSale(draft.orderNo, draft.type, draft.reason);
+      setTicket(created);
+      setState('done');
+    } catch (e) {
+      setError((e as Error).message);
+      setState('idle');
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3.5">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-amber-900">售后申请待确认</span>
+        <span className="rounded border border-amber-200 bg-white px-1.5 py-0.5 text-[11px] text-amber-700">
+          未提交
+        </span>
+      </div>
+      <div className="mt-2 space-y-1 text-xs text-amber-900/80">
+        <p>
+          订单 <span className="font-mono">{draft.orderNo}</span> · {draft.statusText}
+        </p>
+        <p>
+          {draft.productName ? `${draft.productName} · ` : ''}
+          {draft.type} · {money(draft.totalAmount)}
+        </p>
+        <p>原因：{draft.reason}</p>
+      </div>
+
+      {state === 'cancelled' ? (
+        <p className="mt-2.5 text-xs text-ink-500">已取消，未创建任何工单。</p>
+      ) : (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={state === 'submitting'}
+            className="rounded bg-ink-900 px-2.5 py-1 text-xs text-white transition-opacity hover:opacity-85 disabled:opacity-50"
+          >
+            {state === 'submitting' ? '提交中…' : '确认提交'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setState('cancelled')}
+            disabled={state === 'submitting'}
+            className="rounded border border-ink-200 bg-white px-2.5 py-1 text-xs text-ink-600 transition-colors hover:text-ink-900 disabled:opacity-50"
+          >
+            取消
+          </button>
+          <span className="text-[11px] text-ink-400">确认后才会真正建单</span>
+        </div>
+      )}
+
+      {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
     </div>
   );
 }

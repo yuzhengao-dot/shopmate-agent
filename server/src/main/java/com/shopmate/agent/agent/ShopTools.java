@@ -158,22 +158,54 @@ public class ShopTools {
         }
     }
 
-    @Tool("为已签收或已完成的订单创建售后工单（退货退款 / 换货 / 维修），创建后状态为待审核。用户明确表达退货、退款、换货、维修诉求时调用。")
-    public String createAfterSaleTicket(
+    @Tool("""
+            为已签收或已完成的订单生成售后申请草稿（退货退款 / 换货 / 维修）。
+            该工具只做资格校验并返回待确认草稿，不会真正创建工单；工单必须由用户在界面点击「确认提交」后才会写入。
+            因此调用后不要说工单已创建，而要请用户确认。""")
+    public String prepareAfterSaleTicket(
             @P("订单号，例如 SM20261028002") String orderNo,
             @P("售后类型：退货退款 / 换货 / 维修") String type,
             @P("用户描述的问题，例如 吸力变弱、外包装破损") String reason,
             @ToolMemoryId String memoryId) {
 
-        String id = trace.begin(memoryId, "createAfterSaleTicket", "创建售后工单",
+        String id = trace.begin(memoryId, "prepareAfterSaleTicket", "售后预检",
                 args("orderNo", orderNo, "type", type, "reason", reason));
         try {
-            AfterSaleTicket ticket = orders.createTicket(orderNo, type, reason);
-            trace.done(memoryId, id, "createAfterSaleTicket", "工单 " + ticket.ticketNo() + " 已创建",
-                    Map.of("type", "ticket", "item", ticket));
-            return mapper.writeValueAsString(Map.of("ticket", ticket, "nextStep", "客服将在 24 小时内审核并联系用户"));
+            Optional<Order> found = orders.findByNo(orderNo);
+            if (found.isEmpty()) {
+                trace.fail(memoryId, id, "prepareAfterSaleTicket", "订单不存在");
+                return "{\"error\":\"订单不存在：" + orderNo + "\"}";
+            }
+            Order order = found.get();
+            if (!"DELIVERED".equals(order.status()) && !"COMPLETED".equals(order.status())) {
+                trace.fail(memoryId, id, "prepareAfterSaleTicket", "当前状态不可申请售后");
+                return "{\"error\":\"订单 " + orderNo + " 当前为「" + order.statusText()
+                        + "」，只有已签收或已完成的订单可以申请售后\"}";
+            }
+            Optional<AfterSaleTicket> existing = orders.findTicketByOrder(orderNo);
+            if (existing.isPresent()) {
+                trace.fail(memoryId, id, "prepareAfterSaleTicket", "已有售后工单");
+                return "{\"error\":\"订单 " + orderNo + " 已有售后工单：" + existing.get().ticketNo()
+                        + "，请勿重复提交\"}";
+            }
+
+            String ticketType = (type == null || type.isBlank()) ? "退货退款" : type.trim();
+            String desc = (reason == null || reason.isBlank()) ? "用户未填写具体原因" : reason.trim();
+            Map<String, Object> draft = new LinkedHashMap<>();
+            draft.put("orderNo", order.orderNo());
+            draft.put("statusText", order.statusText());
+            draft.put("type", ticketType);
+            draft.put("reason", desc);
+            draft.put("totalAmount", order.totalAmount());
+            draft.put("productName", order.items().isEmpty() ? "" : order.items().get(0).productName());
+
+            trace.done(memoryId, id, "prepareAfterSaleTicket", "待用户确认：" + ticketType,
+                    Map.of("type", "afterSaleDraft", "item", draft));
+            return mapper.writeValueAsString(Map.of(
+                    "draft", draft,
+                    "nextStep", "草稿已生成，等待用户在界面点击「确认提交」后才会真正建单"));
         } catch (Exception e) {
-            trace.fail(memoryId, id, "createAfterSaleTicket", e.getMessage());
+            trace.fail(memoryId, id, "prepareAfterSaleTicket", e.getMessage());
             return "{\"error\":\"" + e.getMessage() + "\"}";
         }
     }

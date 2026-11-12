@@ -189,22 +189,22 @@ public class DemoAgent {
         }
         Order order = target.get();
         String type = text.contains("换") ? "换货" : (text.contains("维修") || text.contains("坏") ? "维修" : "退货退款");
-        String result = tools.createAfterSaleTicket(order.orderNo(), type, text, sessionId);
-        if (!result.contains("\"ticket\"")) {
-            say(stream, "这单暂时无法创建售后工单：" + order.orderNo() + "（" + order.statusText()
+        String result = tools.prepareAfterSaleTicket(order.orderNo(), type, text, sessionId);
+        if (!result.contains("\"draft\"")) {
+            say(stream, "这单暂时无法申请售后：" + order.orderNo() + "（" + order.statusText()
                     + "）。已签收或已完成的订单才能申请，其他情况请回复「人工客服」。");
             return;
         }
+        String productName = order.items().isEmpty() ? "订单商品" : order.items().get(0).productName();
         say(stream, String.format("""
-                已为订单 %s 提交「%s」申请，工单状态：待审核。
+                已为订单 %s 生成「%s」申请草稿，还没有提交。
 
-                处理流程：
-                1. 客服在 24 小时内审核工单
-                2. 审核通过后短信告知寄回地址
-                3. 仓库签收后 1-3 个工作日原路退款
+                - 商品：%s
+                - 金额：¥%,.2f
+                - 当前状态：%s
 
-                还有其他需要我处理的吗？
-                """, order.orderNo(), type));
+                请在下方卡片点击「确认提交」，确认后才会真正创建工单；不想提交可以点「取消」。
+                """, order.orderNo(), type, productName, order.totalAmount(), order.statusText()));
     }
 
     private String extractOrderNo(String text) {
