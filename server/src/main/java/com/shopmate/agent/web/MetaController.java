@@ -36,6 +36,7 @@ public class MetaController {
                 "预算 3000 元以内，推荐一款拍照好的手机",
                 "我的订单到哪了",
                 "降噪耳机有什么推荐",
+                "退货的运费谁承担",
                 "我想退掉 SM20261028002 这单"));
         data.put("categories", products.categories());
         data.put("productCount", products.findAll().size());

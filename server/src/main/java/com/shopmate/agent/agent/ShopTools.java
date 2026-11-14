@@ -2,11 +2,13 @@ package com.shopmate.agent.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shopmate.agent.model.AfterSaleTicket;
+import com.shopmate.agent.model.KnowledgeHit;
 import com.shopmate.agent.model.Order;
 import com.shopmate.agent.model.OrderItem;
 import com.shopmate.agent.model.Product;
 import com.shopmate.agent.repository.OrderRepository;
 import com.shopmate.agent.repository.ProductRepository;
+import com.shopmate.agent.search.KnowledgeIndex;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolMemoryId;
@@ -29,12 +31,15 @@ public class ShopTools {
 
     private final ProductRepository products;
     private final OrderRepository orders;
+    private final KnowledgeIndex knowledge;
     private final ToolTraceEmitter trace;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    public ShopTools(ProductRepository products, OrderRepository orders, ToolTraceEmitter trace) {
+    public ShopTools(ProductRepository products, OrderRepository orders,
+                     KnowledgeIndex knowledge, ToolTraceEmitter trace) {
         this.products = products;
         this.orders = orders;
+        this.knowledge = knowledge;
         this.trace = trace;
     }
 
@@ -154,6 +159,31 @@ public class ShopTools {
                     "tracking", order.tracking()));
         } catch (Exception e) {
             trace.fail(memoryId, id, "checkLogistics", e.getMessage());
+            return "{\"error\":\"" + e.getMessage() + "\"}";
+        }
+    }
+
+    @Tool("""
+            检索平台规则知识库。凡是不依赖具体订单的政策类问题都先查这里：
+            退换货规则、退货运费、退款到账时间、换货时效、保修政策、发票开具、发货与配送时效、
+            签收验货、优惠券与积分、价格保护、售后处理时效、支付方式、客服时间、安装服务。
+            回答要依据检索到的规则，并点明依据的是哪一条。""")
+    public String searchKnowledge(
+            @P("用户的问题或关键词，例如 退货运费谁承担、保修多久、多久能发货") String query,
+            @ToolMemoryId String memoryId) {
+
+        String id = trace.begin(memoryId, "searchKnowledge", "检索知识库", args("query", query));
+        try {
+            List<KnowledgeHit> hits = knowledge.search(query, 3);
+            if (hits.isEmpty()) {
+                trace.done(memoryId, id, "searchKnowledge", "知识库没有匹配的规则", null);
+                return "{\"total\":0,\"items\":[]}";
+            }
+            trace.done(memoryId, id, "searchKnowledge", "命中 " + hits.size() + " 条平台规则",
+                    Map.of("type", "knowledge", "items", hits));
+            return mapper.writeValueAsString(Map.of("total", hits.size(), "items", hits));
+        } catch (Exception e) {
+            trace.fail(memoryId, id, "searchKnowledge", e.getMessage());
             return "{\"error\":\"" + e.getMessage() + "\"}";
         }
     }

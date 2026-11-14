@@ -2,6 +2,7 @@ import type { ChatMessage } from '@/api/types';
 import { RichText } from './RichText';
 import { ProductCard } from './ProductCard';
 import { OrderCard, TicketCard, AfterSaleDraftCard } from './OrderCard';
+import { KnowledgeCard } from './KnowledgeCard';
 
 interface MessageItemProps {
   message: ChatMessage;
@@ -61,6 +62,13 @@ export function MessageItem({ message, streaming, onAsk }: MessageItemProps) {
                 {payload.items.map((order) => (
                   <OrderCard key={`${tool.id}-${order.orderNo}`} order={order} onAsk={onAsk} />
                 ))}
+              </div>
+            );
+          }
+          if (payload.type === 'knowledge') {
+            return (
+              <div key={tool.id} className="mt-3">
+                <KnowledgeCard hits={payload.items} />
               </div>
             );
           }

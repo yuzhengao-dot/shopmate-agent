@@ -55,9 +55,21 @@ export interface AfterSaleDraft {
   productName: string;
 }
 
+/** 知识库命中：内容来自平台规则库，由 BM25 检索返回 */
+export interface KnowledgeHit {
+  id: number;
+  title: string;
+  category: string;
+  content: string;
+  snippet: string;
+  /** 相对相关度，0~1 */
+  match: number;
+}
+
 export type ToolPayload =
   | { type: 'products'; items: Product[] }
   | { type: 'orders'; items: Order[] }
+  | { type: 'knowledge'; items: KnowledgeHit[] }
   | { type: 'ticket'; item: AfterSaleTicket }
   | { type: 'afterSaleDraft'; item: AfterSaleDraft };
 

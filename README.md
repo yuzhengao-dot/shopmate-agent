@@ -18,6 +18,7 @@
 | 订单查询 | 按状态查询当前用户订单，返回订单卡片（含明细） |
 | 物流跟踪 | 按订单号或「最近一笔订单」查询承运商与最新轨迹 |
 | 售后办理 | 校验订单状态 → 生成售后草稿 → 用户点击「确认提交」后才真正建单（两步确认） |
+| 规则问答 | 检索平台规则知识库（退换货 / 运费 / 保修 / 发票 / 配送…），回答带出处与命中卡片 |
 | 流式对话 | SSE `meta / tool / token / error / done` 事件，逐字输出 + 工具轨迹实时上屏 |
 | 双运行模式 | 配置了 LLM 密钥 → 真 Agent；没有密钥 → 内置规则引擎，同样跑完整工具链路 |
 
@@ -40,9 +41,10 @@ shopmate-agent/
 │     │  ├─ DemoAgent.java         无密钥时的规则引擎（复用同一套 ShopTools）
 │     │  ├─ ChatStream.java        SSE 事件封装
 │     │  ├─ ChatStreamRegistry.java 会话 → SSE 通道
-│     │  └─ ToolTraceEmitter.java  工具执行中把轨迹推给前端
-│     ├─ repository/               ProductRepository / OrderRepository（JdbcTemplate）
-│     ├─ model/                    Product / Order / OrderItem / TrackingNode / AfterSaleTicket
+│     │  ├─ ToolTraceEmitter.java  工具执行中把轨迹推给前端
+│     ├─ search/KnowledgeIndex.java BM25 检索（中文 bigram 分词，无向量库依赖）
+│     ├─ repository/               ProductRepository / OrderRepository / KnowledgeRepository
+│     ├─ model/                    Product / Order / OrderItem / TrackingNode / AfterSaleTicket / KnowledgeArticle
 │     ├─ service/ChatService.java  对话编排 + 线程池
 │     └─ web/                      ChatController / CatalogController / MetaController
 └─ web/                            React 前端
@@ -62,7 +64,7 @@ cd server
 mvn spring-boot:run
 ```
 
-默认端口 `8080`，H2 内存库启动时自动执行 `schema.sql` + `data.sql`。
+默认端口 `8080`，H2 内存库启动时自动执行 `schema.sql` + `data.sql` + `knowledge.sql`。
 `http://localhost:8080/h2-console` 可查看数据（JDBC URL：`jdbc:h2:mem:shopmate`，用户 `SA`，密码留空）。
 
 打包运行：
@@ -145,6 +147,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | `queryOrders` | status | 订单列表 |
 | `getOrderDetail` | orderNo | 订单 + 明细 |
 | `checkLogistics` | orderNo | 订单 + 轨迹 |
+| `searchKnowledge` | query | 平台规则命中列表（标题 / 摘录 / 相关度） |
 | `prepareAfterSaleTicket` | orderNo, type, reason | 售后草稿（只校验 + 生成待确认卡片，不写库） |
 
 工具内部通过 `@ToolMemoryId` 拿到 `sessionId`，再从 `ChatStreamRegistry` 找到对应的 SSE 通道——
@@ -158,6 +161,19 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 2. 前端渲染「售后申请待确认」，只有用户点击「确认提交」，才调用 `POST /api/orders/{orderNo}/after-sale` 真正写库，并把卡片换成工单。
 
 写入口没有暴露成工具，模型自己走不到第二步——从机制上避免「用户只是问一句，Agent 就把单建了」。
+
+### 知识库检索（RAG）
+
+平台规则（退换货、运费、保修、发票、配送时效…）不适合硬编码进提示词，所以单独建了 `kb_article` 表
+（16 篇 FAQ，数据在 `knowledge.sql`），由 `searchKnowledge` 工具按需检索：
+
+1. **分词**：中文按字符 bigram 切分（「退货」「运费」），英文与数字按整词；单字作为兜底特征并降权到 0.35，避免「的 / 了 / 吗」干扰；
+2. **打分**：BM25（`k1=1.2`、`b=0.75`），词频饱和 + 文档长度归一化；
+3. **清洗**：查询侧剔除「多久 / 什么 / 怎么」这类通用词；结果按最高分归一化，相对相关度低于 0.45 的直接丢弃，不把噪声规则塞给模型；
+4. **可见性**：命中规则以 `knowledge` payload 推到前端，卡片标出分类、标题、摘录与相关度，回答里也会点明依据哪一条。
+
+没有引入向量库和 embedding 模型，是为了让**演示模式（无 Key）也能完整跑通**，启动零额外依赖。
+`KnowledgeIndex` 是独立组件，要换成语义检索只替换这一个类，工具与前端都不用动。
 
 ## 接口
 
@@ -181,7 +197,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | `error` | `{message}` |
 | `done` | `{sessionId}` |
 
-`payload.type` 决定前端渲染哪种卡片：`products` / `orders` / `ticket` / `afterSaleDraft`。
+`payload.type` 决定前端渲染哪种卡片：`products` / `orders` / `knowledge` / `ticket` / `afterSaleDraft`。
 
 ## 演示数据
 
@@ -197,6 +213,11 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 3. SM20261105001 的物流到哪了
 4. 我想退掉 SM20261028002 这单，扫地机器人噪音太大
 5. 降噪耳机有什么推荐
+6. 退货的运费谁承担
+7. 保修多久
+8. 多久能发货
+
+第 6～8 条走知识库检索，回答会带上「知识库检索」卡片和命中的平台规则。
 
 ## 说明
 

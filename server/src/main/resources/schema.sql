@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS shop_order;
 DROP TABLE IF EXISTS order_item;
 DROP TABLE IF EXISTS order_tracking;
 DROP TABLE IF EXISTS after_sale_ticket;
+DROP TABLE IF EXISTS kb_article;
 
 CREATE TABLE product (
     id             BIGINT PRIMARY KEY,
@@ -52,4 +53,12 @@ CREATE TABLE after_sale_ticket (
     reason     VARCHAR(200) NOT NULL,
     status     VARCHAR(20) NOT NULL,
     created_at VARCHAR(20) NOT NULL
+);
+
+-- 知识库：退换货 / 物流 / 支付等平台规则，供检索增强使用
+CREATE TABLE kb_article (
+    id       BIGINT PRIMARY KEY,
+    title    VARCHAR(120) NOT NULL,
+    category VARCHAR(40)  NOT NULL,
+    content  VARCHAR(1200) NOT NULL
 );

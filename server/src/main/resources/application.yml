@@ -20,7 +20,7 @@ spring:
       mode: always
       encoding: UTF-8
       schema-locations: classpath:schema.sql
-      data-locations: classpath:data.sql
+      data-locations: classpath:data.sql,classpath:knowledge.sql
   h2:
     console:
       enabled: true

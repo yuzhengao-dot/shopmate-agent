@@ -1,10 +1,12 @@
 package com.shopmate.agent.agent;
 
+import com.shopmate.agent.model.KnowledgeHit;
 import com.shopmate.agent.model.Order;
 import com.shopmate.agent.model.Product;
 import com.shopmate.agent.model.TrackingNode;
 import com.shopmate.agent.repository.OrderRepository;
 import com.shopmate.agent.repository.ProductRepository;
+import com.shopmate.agent.search.KnowledgeIndex;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -28,14 +30,25 @@ public class DemoAgent {
             "手机", "耳机", "扫地机器人", "显示器", "净化器", "吹风机",
             "洁面", "精华", "咖啡", "音箱");
 
+    /** 政策类问法的线索词：命中就先查知识库，而不是当成具体订单诉求 */
+    private static final List<String> KNOWLEDGE_WORDS = List.of(
+            "保修", "质保", "发票", "运费", "包邮", "优惠券", "积分", "无理由", "价格保护",
+            "保价", "降价", "到账", "配送时效", "配送范围", "配送费", "多久发货", "什么时候发货",
+            "多久能到", "什么时候能到", "几天到", "多久到", "什么时候到", "支付方式",
+            "会员", "人工客服", "客服",
+            "几点上班", "安装", "验货", "偏远", "处理时效", "多久处理", "退多少钱");
+
     private final ShopTools tools;
     private final ProductRepository products;
     private final OrderRepository orders;
+    private final KnowledgeIndex knowledge;
 
-    public DemoAgent(ShopTools tools, ProductRepository products, OrderRepository orders) {
+    public DemoAgent(ShopTools tools, ProductRepository products, OrderRepository orders,
+                     KnowledgeIndex knowledge) {
         this.tools = tools;
         this.products = products;
         this.orders = orders;
+        this.knowledge = knowledge;
     }
 
     public void reply(String sessionId, String message, ChatStream stream) {
@@ -45,6 +58,12 @@ public class DemoAgent {
             return;
         }
 
+        // 政策类问题优先走知识库；带订单号时说明用户在问具体某一单，仍走订单链路
+        if (extractOrderNo(text) == null
+                && containsAny(text, KNOWLEDGE_WORDS.toArray(String[]::new))) {
+            knowledge(sessionId, text, stream);
+            return;
+        }
         if (containsAny(text, "退货", "退款", "退掉", "退换", "售后", "换货", "维修", "坏了", "损坏", "质量", "不想要")) {
             afterSale(sessionId, text, stream);
             return;
@@ -81,6 +100,7 @@ public class DemoAgent {
                 - 订单：我最近的订单是什么状态
                 - 物流：SM20261105001 到哪了
                 - 售后：我想退掉 SM20261028002 这单
+                - 规则：退货的运费谁承担
 
                 需要人工介入的话，回复「人工客服」。
                 """);
@@ -205,6 +225,25 @@ public class DemoAgent {
 
                 请在下方卡片点击「确认提交」，确认后才会真正创建工单；不想提交可以点「取消」。
                 """, order.orderNo(), type, productName, order.totalAmount(), order.statusText()));
+    }
+
+    private void knowledge(String sessionId, String text, ChatStream stream) {
+        tools.searchKnowledge(text, sessionId);
+        List<KnowledgeHit> hits = knowledge.search(text, 2);
+        if (hits.isEmpty()) {
+            say(stream, "这条我在平台规则里没查到。可以换个说法，或者回复「人工客服」让同事帮你确认。");
+            return;
+        }
+        KnowledgeHit top = hits.get(0);
+        StringBuilder sb = new StringBuilder();
+        sb.append("按平台《").append(top.title()).append("》：\n\n").append(top.content()).append("\n\n");
+        if (hits.size() > 1) {
+            KnowledgeHit second = hits.get(1);
+            sb.append("另外《").append(second.title()).append("》也相关：")
+                    .append(firstSentence(second.content())).append("\n\n");
+        }
+        sb.append("以上是平台现行规则；具体到某一单的处理进度，把订单号发我就能查。");
+        say(stream, sb.toString());
     }
 
     private String extractOrderNo(String text) {
