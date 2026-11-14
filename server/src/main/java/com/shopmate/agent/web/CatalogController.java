@@ -52,7 +52,7 @@ public class CatalogController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "订单不存在"));
     }
 
-    /** 售后建单（页面内快捷入口，与 Agent 的 createAfterSaleTicket 工具共用逻辑） */
+    /** 售后建单：Agent 只生成草稿，用户在前端确认后走这里真正写库 */
     @PostMapping("/orders/{orderNo}/after-sale")
     public AfterSaleTicket afterSale(@PathVariable String orderNo,
                                      @RequestBody(required = false) AfterSaleRequest request) {

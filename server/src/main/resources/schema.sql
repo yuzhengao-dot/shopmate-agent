@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS order_item;
 DROP TABLE IF EXISTS order_tracking;
 DROP TABLE IF EXISTS after_sale_ticket;
 DROP TABLE IF EXISTS kb_article;
+DROP TABLE IF EXISTS tool_call;
 
 CREATE TABLE product (
     id             BIGINT PRIMARY KEY,
@@ -61,4 +62,17 @@ CREATE TABLE kb_article (
     title    VARCHAR(120) NOT NULL,
     category VARCHAR(40)  NOT NULL,
     content  VARCHAR(1200) NOT NULL
+);
+
+-- 工具审计：每次工具调用落一行，记录入参、结果、耗时与状态
+CREATE TABLE tool_call (
+    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    trace_id    VARCHAR(40) NOT NULL UNIQUE,
+    session_id  VARCHAR(64),
+    tool_name   VARCHAR(60) NOT NULL,
+    status      VARCHAR(20) NOT NULL,
+    args_json   VARCHAR(600),
+    summary     VARCHAR(300),
+    duration_ms BIGINT,
+    created_at  VARCHAR(20) NOT NULL
 );

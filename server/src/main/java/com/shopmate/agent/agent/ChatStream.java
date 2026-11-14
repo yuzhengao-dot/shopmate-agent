@@ -65,24 +65,26 @@ public class ChatStream {
         send("tool", data);
     }
 
-    public void toolDone(String id, String name, String summary, Object payload) {
+    public void toolDone(String id, String name, String summary, Object payload, long durationMs) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", id);
         data.put("name", name);
         data.put("status", "done");
         data.put("summary", summary);
+        data.put("durationMs", durationMs);
         if (payload != null) {
             data.put("payload", payload);
         }
         send("tool", data);
     }
 
-    public void toolFail(String id, String name, String message) {
+    public void toolFail(String id, String name, String message, long durationMs) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", id);
         data.put("name", name);
         data.put("status", "error");
         data.put("summary", message);
+        data.put("durationMs", durationMs);
         send("tool", data);
     }
 

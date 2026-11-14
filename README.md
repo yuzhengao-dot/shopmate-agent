@@ -19,6 +19,7 @@
 | 物流跟踪 | 按订单号或「最近一笔订单」查询承运商与最新轨迹 |
 | 售后办理 | 校验订单状态 → 生成售后草稿 → 用户点击「确认提交」后才真正建单（两步确认） |
 | 规则问答 | 检索平台规则知识库（退换货 / 运费 / 保修 / 发票 / 配送…），回答带出处与命中卡片 |
+| 工具审计 | 每次工具调用落 `tool_call` 表（入参 / 结果 / 耗时 / 状态），页面实时显示单次耗时与平均耗时 |
 | 流式对话 | SSE `meta / tool / token / error / done` 事件，逐字输出 + 工具轨迹实时上屏 |
 | 双运行模式 | 配置了 LLM 密钥 → 真 Agent；没有密钥 → 内置规则引擎，同样跑完整工具链路 |
 
@@ -41,12 +42,12 @@ shopmate-agent/
 │     │  ├─ DemoAgent.java         无密钥时的规则引擎（复用同一套 ShopTools）
 │     │  ├─ ChatStream.java        SSE 事件封装
 │     │  ├─ ChatStreamRegistry.java 会话 → SSE 通道
-│     │  ├─ ToolTraceEmitter.java  工具执行中把轨迹推给前端
+│     │  ├─ ToolTraceEmitter.java  工具执行中把轨迹推给前端，并写入审计表
 │     ├─ search/KnowledgeIndex.java BM25 检索（中文 bigram 分词，无向量库依赖）
-│     ├─ repository/               ProductRepository / OrderRepository / KnowledgeRepository
-│     ├─ model/                    Product / Order / OrderItem / TrackingNode / AfterSaleTicket / KnowledgeArticle
+│     ├─ repository/               ProductRepository / OrderRepository / KnowledgeRepository / ToolCallRepository
+│     ├─ model/                    Product / Order / OrderItem / TrackingNode / AfterSaleTicket / KnowledgeArticle / ToolCallRecord
 │     ├─ service/ChatService.java  对话编排 + 线程池
-│     └─ web/                      ChatController / CatalogController / MetaController
+│     └─ web/                      ChatController / CatalogController / MetaController / ToolCallController
 └─ web/                            React 前端
    └─ src/
       ├─ api/                      fetch 封装 + SSE 解析
@@ -131,7 +132,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
                  ShopTools（@Tool + @ToolMemoryId）
                      │  ① ToolTraceEmitter.begin → SSE tool 事件（running）
                      │  ② 查询 H2（商品 / 订单 / 物流 / 工单）
-                     │  ③ done(payload) → SSE tool 事件（done + 结构化数据）
+                     │  ③ done(payload, cost) → SSE tool 事件（done + 耗时 + 结构化数据）
                      ▼
               onPartialResponse → SSE token 事件（逐字）
                      ▼
@@ -175,6 +176,17 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 没有引入向量库和 embedding 模型，是为了让**演示模式（无 Key）也能完整跑通**，启动零额外依赖。
 `KnowledgeIndex` 是独立组件，要换成语义检索只替换这一个类，工具与前端都不用动。
 
+### 工具调用审计
+
+工具调用只在前端面板里滚过去就没了，出问题不好复盘，所以每次调用都落一张 `tool_call` 表：
+
+1. `ToolTraceEmitter.begin` 先插一行 `RUNNING`（traceId、会话、工具名、入参 JSON），同时推 SSE `tool(running)`；
+2. 执行结束由 `done` / `fail` 补写 `status`（`DONE` / `ERROR`）、结果摘要与 `duration_ms`；
+3. 审计写库包在 `audit(Runnable)` 的 try/catch 里——它是旁路，写失败也不能打断正在进行的对话。
+
+前端工具面板直接展示单次耗时（`searchProducts · 24ms`）与底部平均值，`GET /api/tool-calls?limit=20`
+返回最近调用明细和 `avgDurationMs`，用于页面外排查。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |
@@ -185,6 +197,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | GET | `/api/orders?status=ALL` | 订单列表（SHIPPED / DELIVERED / PAID / COMPLETED） |
 | GET | `/api/orders/{orderNo}` | 订单详情 |
 | POST | `/api/orders/{orderNo}/after-sale` | 创建售后工单 `{type, reason}` |
+| GET | `/api/tool-calls?limit=20` | 最近的工具调用审计明细 + 平均耗时 |
 | POST | `/api/chat` | 对话，`text/event-stream`，body `{sessionId, message}` |
 
 ### SSE 事件
@@ -192,7 +205,7 @@ ChatService ──► AiServices<ShopAssistant>  ← MessageWindowChatMemory（�
 | event | data |
 | --- | --- |
 | `meta` | `{sessionId, mode, model}` |
-| `tool` | `{id, name, label, status, args?, summary?, payload?}`，`status=running/done/fail` |
+| `tool` | `{id, name, label, status, args?, summary?, durationMs?, payload?}`，`status=running/done/error` |
 | `token` | `{text}` |
 | `error` | `{message}` |
 | `done` | `{sessionId}` |

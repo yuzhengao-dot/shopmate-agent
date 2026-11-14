@@ -22,6 +22,7 @@ function upsertTool(tools: ToolTrace[], raw: Record<string, any>): ToolTrace[] {
     label: String(raw.label ?? existing?.label ?? raw.name ?? '工具调用'),
     status: (raw.status as ToolTrace['status']) ?? 'running',
     summary: raw.summary ? String(raw.summary) : existing?.summary,
+    durationMs: typeof raw.durationMs === 'number' ? raw.durationMs : existing?.durationMs,
     payload: (raw.payload as ToolTrace['payload']) ?? existing?.payload,
   };
   if (index < 0) return [...tools, next];

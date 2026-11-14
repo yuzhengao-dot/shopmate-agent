@@ -79,6 +79,8 @@ export interface ToolTrace {
   label: string;
   status: 'running' | 'done' | 'error';
   summary?: string;
+  /** 服务端记录的本次执行耗时（毫秒），未结束时没有该字段 */
+  durationMs?: number;
   payload?: ToolPayload;
 }
 
